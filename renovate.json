@@ -12,7 +12,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github\\/workflows\\/lambda-package\\.yml$/"
+        "/^\\.github\\/workflows\\/(lambda-package|release)\\.yml$/"
       ],
       "matchStrings": [
         "cargo install (?<depName>cargo-lambda) --version (?<currentValue>\\S+) --locked"
@@ -22,13 +22,24 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github\\/workflows\\/lambda-package\\.yml$/"
+        "/^\\.github\\/workflows\\/(lambda-package|release)\\.yml$/"
       ],
       "matchStrings": [
         "uses: mlugg/setup-zig@[^\\n]+\\n\\s+with:\\n\\s+version: (?<currentValue>\\S+)"
       ],
       "depNameTemplate": "ziglang/zig",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/release\\.yml$/"
+      ],
+      "matchStrings": [
+        "uses: release-plz/action@[^\\n]+\\n\\s+with:\\n\\s+command: \\S+\\n\\s+version: (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "release-plz",
+      "datasourceTemplate": "crate"
     }
   ],
   "packageRules": [
