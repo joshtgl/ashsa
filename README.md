@@ -10,9 +10,9 @@ The Lambda reads configuration from environment variables.
 | Variable | Required | Description |
 | --- | --- | --- |
 | `BASE_URL` | Yes | Base URL for the downstream smart home endpoint. Trailing `/` is removed automatically. |
-| `DEBUG` | No | Enables debug logging and allows fallback token behavior. |
+| `DEBUG` | No | Enables debug logging. |
 | `NOT_VERIFY_SSL` | No | Disables TLS certificate verification. Intended only for controlled environments. |
-| `LONG_LIVED_ACCESS_TOKEN` | No | Fallback bearer token used only when the request token is missing and `DEBUG` is enabled. |
+| `LONG_LIVED_ACCESS_TOKEN` | No | Fallback bearer token used when the request token is missing. |
 | `AWS_DEFAULT_REGION` | No | Used to suffix the HTTP user agent string. |
 
 ## HTTP Behavior

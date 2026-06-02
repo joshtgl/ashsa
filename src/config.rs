@@ -120,16 +120,16 @@ mod tests {
     }
 
     #[test]
-    fn debug_and_fallback_token_are_loaded() {
+    fn debug_and_fallback_token_are_loaded_independently() {
         let config = Config::from_map(&vars(&[
             ("BASE_URL", "https://example.com"),
             ("AWS_DEFAULT_REGION", "us-east-1"),
-            ("DEBUG", "1"),
+            ("DEBUG", "0"),
             ("LONG_LIVED_ACCESS_TOKEN", "fallback-token"),
         ]))
         .unwrap();
 
-        assert!(config.debug);
+        assert!(!config.debug);
         assert_eq!(
             config.fallback_bearer_token.as_deref(),
             Some("fallback-token")

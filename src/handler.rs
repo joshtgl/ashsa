@@ -164,10 +164,8 @@ fn extract_token<'a>(event: &'a Value, config: &'a Config) -> Result<&'a str, Re
         return Ok(token);
     }
 
-    if config.debug {
-        if let Some(token) = config.fallback_bearer_token.as_deref() {
-            return Ok(token);
-        }
+    if let Some(token) = config.fallback_bearer_token.as_deref() {
+        return Ok(token);
     }
 
     Err(RequestError::MissingToken)
@@ -323,12 +321,11 @@ mod tests {
     }
 
     #[test]
-    fn debug_mode_allows_fallback_token() {
+    fn fallback_token_is_used_even_when_debug_is_disabled() {
         let event = sample_event(json!({
             "type": "BearerToken"
         }));
         let mut cfg = config("https://example.com".to_owned());
-        cfg.debug = true;
         cfg.fallback_bearer_token = Some("fallback-token".to_owned());
 
         let token = extract_token(&event, &cfg).unwrap();
