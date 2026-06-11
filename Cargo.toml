@@ -1,6 +1,6 @@
 [package]
 name = "ashsa"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Alexa Smart Home Skill Adapter for Home Assistant"
 license = "MIT"
