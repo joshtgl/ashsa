@@ -26,10 +26,11 @@ fn init_tracing() {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
+    let in_lambda = std::env::var_os("AWS_LAMBDA_FUNCTION_NAME").is_some();
 
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
-        .without_time()
+        .with_ansi(!in_lambda)
         .compact()
         .init();
 }
