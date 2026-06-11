@@ -132,6 +132,22 @@ fn validate_payload_version(event: &Value) -> Result<(), RequestError> {
 }
 
 fn extract_token<'a>(event: &'a Value, config: &'a Config) -> Result<&'a str, RequestError> {
+    let scope = validated_scope(event)?;
+
+    if let Some(token) = config.fallback_bearer_token.as_deref() {
+        info!("Using long lived token");
+        return Ok(token);
+    }
+
+    if let Some(token) = scope.get("token").and_then(Value::as_str) {
+        info!("Using token from event");
+        return Ok(token);
+    }
+
+    Err(RequestError::MissingToken)
+}
+
+fn validated_scope<'a>(event: &'a Value) -> Result<&'a Value, RequestError> {
     let directive = event
         .get("directive")
         .ok_or(RequestError::MissingDirective)?;
@@ -160,15 +176,7 @@ fn extract_token<'a>(event: &'a Value, config: &'a Config) -> Result<&'a str, Re
         return Err(RequestError::UnsupportedScopeType(scope_type.to_owned()));
     }
 
-    if let Some(token) = scope.get("token").and_then(Value::as_str) {
-        return Ok(token);
-    }
-
-    if let Some(token) = config.fallback_bearer_token.as_deref() {
-        return Ok(token);
-    }
-
-    Err(RequestError::MissingToken)
+    Ok(scope)
 }
 
 fn alexa_error(error_type: &str, message: String) -> Value {
@@ -259,6 +267,20 @@ mod tests {
     }
 
     #[test]
+    fn long_lived_token_takes_precedence_over_event_token() {
+        let event = sample_event(json!({
+            "type": "BearerToken",
+            "token": "endpoint-token"
+        }));
+
+        let mut cfg = config("https://example.com".to_owned());
+        cfg.fallback_bearer_token = Some("fallback-token".to_owned());
+
+        let token = extract_token(&event, &cfg).unwrap();
+        assert_eq!(token, "fallback-token");
+    }
+
+    #[test]
     fn extracts_linking_grantee_token() {
         let event = json!({
             "directive": {
@@ -332,6 +354,21 @@ mod tests {
         assert_eq!(token, "fallback-token");
     }
 
+    #[test]
+    fn fallback_token_still_requires_bearer_scope_type() {
+        let event = sample_event(json!({
+            "type": "AccessToken"
+        }));
+        let mut cfg = config("https://example.com".to_owned());
+        cfg.fallback_bearer_token = Some("fallback-token".to_owned());
+
+        let err = extract_token(&event, &cfg).unwrap_err();
+        assert_eq!(
+            err,
+            RequestError::UnsupportedScopeType("AccessToken".to_owned())
+        );
+    }
+
     #[tokio::test]
     async fn successful_downstream_json_is_passed_through() {
         let mut server = Server::new_async().await;
@@ -355,6 +392,33 @@ mod tests {
             .await;
 
         let cfg = config(server.url());
+        let client = build_http_client(&cfg).unwrap();
+        let app = App::new(cfg, client);
+        let actual = app.handle_event(event).await;
+
+        mock.assert_async().await;
+        assert_eq!(actual, response_body);
+    }
+
+    #[tokio::test]
+    async fn downstream_request_uses_long_lived_token_when_configured() {
+        let mut server = Server::new_async().await;
+        let response_body = json!({"event": {"header": {"name": "Response"}}});
+        let event = sample_event(json!({
+            "type": "BearerToken",
+            "token": "event-token"
+        }));
+
+        let mock = server
+            .mock("POST", "/api/alexa/smart_home")
+            .match_header("authorization", "Bearer fallback-token")
+            .with_status(200)
+            .with_body(response_body.to_string())
+            .create_async()
+            .await;
+
+        let mut cfg = config(server.url());
+        cfg.fallback_bearer_token = Some("fallback-token".to_owned());
         let client = build_http_client(&cfg).unwrap();
         let app = App::new(cfg, client);
         let actual = app.handle_event(event).await;

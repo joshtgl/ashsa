@@ -12,7 +12,7 @@ The Lambda reads configuration from environment variables.
 | `BASE_URL` | Yes | Base URL for the downstream smart home endpoint. Trailing `/` is removed automatically. |
 | `DEBUG` | No | Enables debug logging. |
 | `NOT_VERIFY_SSL` | No | Disables TLS certificate verification. Intended only for controlled environments. |
-| `LONG_LIVED_ACCESS_TOKEN` | No | Fallback bearer token used when the request token is missing. |
+| `LONG_LIVED_ACCESS_TOKEN` | No | Bearer token to use for downstream requests. When set, it overrides any token carried in the Alexa event. |
 | `AWS_DEFAULT_REGION` | No | Used to suffix the HTTP user agent string. |
 
 ## HTTP Behavior
