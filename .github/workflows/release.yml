@@ -130,10 +130,11 @@ jobs:
       - name: Prepare Lambda assets
         env:
           ZIP_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.zip
-          SBOM_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
+          SBOM_BASE_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.cdx
         run: |
           cp target/lambda/ashsa/bootstrap.zip "$ZIP_NAME"
-          cargo cyclonedx --format json --target ${{ matrix.target }} --override-filename "$SBOM_NAME"
+          cargo cyclonedx --format json --target ${{ matrix.target }} --override-filename "$SBOM_BASE_NAME"
+          test -f "$SBOM_BASE_NAME.json"
 
       - name: Attest Lambda provenance
         id: attest_provenance

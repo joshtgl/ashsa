@@ -53,10 +53,11 @@ jobs:
       - name: Prepare Lambda assets
         env:
           ZIP_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.zip
-          SBOM_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
+          SBOM_BASE_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.cdx
         run: |
           cp target/lambda/ashsa/bootstrap.zip "$ZIP_NAME"
-          cargo cyclonedx --format json --target ${{ matrix.target }} --override-filename "$SBOM_NAME"
+          cargo cyclonedx --format json --target ${{ matrix.target }} --override-filename "$SBOM_BASE_NAME"
+          test -f "$SBOM_BASE_NAME.json"
 
       - name: Upload Lambda artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
