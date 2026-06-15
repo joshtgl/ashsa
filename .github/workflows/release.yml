@@ -138,13 +138,13 @@ jobs:
 
       - name: Attest Lambda provenance
         id: attest_provenance
-        uses: actions/attest@59d8942ac46f204658d82af2d51679c08f6b95f4 # v4.1.0
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: ashsa-lambda-${{ matrix.zip_suffix }}.zip
 
       - name: Attest Lambda SBOM
         id: attest_sbom
-        uses: actions/attest@59d8942ac46f204658d82af2d51679c08f6b95f4 # v4.1.0
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: ashsa-lambda-${{ matrix.zip_suffix }}.zip
           sbom-path: ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
