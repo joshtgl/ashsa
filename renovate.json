@@ -22,7 +22,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github\\/workflows\\/release\\.yml$/"
+        "/^\\.github\\/workflows\\/(lambda-package|release)\\.yml$/"
       ],
       "matchStrings": [
         "cargo install (?<depName>cargo-cyclonedx) --version (?<currentValue>\\S+) --locked"

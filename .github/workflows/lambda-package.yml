@@ -44,17 +44,25 @@ jobs:
       - name: Install cargo-lambda
         run: cargo install cargo-lambda --version 1.9.1 --locked
 
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+
       - name: Build Lambda zip
         run: cargo lambda build --release --output-format zip --target ${{ matrix.target }}
 
-      - name: Prepare named Lambda zip
+      - name: Prepare Lambda assets
         env:
           ZIP_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.zip
-        run: cp target/lambda/ashsa/bootstrap.zip "$ZIP_NAME"
+          SBOM_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
+        run: |
+          cp target/lambda/ashsa/bootstrap.zip "$ZIP_NAME"
+          cargo cyclonedx --format json --target ${{ matrix.target }} --override-filename "$SBOM_NAME"
 
       - name: Upload Lambda artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact_name }}
-          path: ashsa-lambda-${{ matrix.zip_suffix }}.zip
+          path: |
+            ashsa-lambda-${{ matrix.zip_suffix }}.zip
+            ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
           if-no-files-found: error
