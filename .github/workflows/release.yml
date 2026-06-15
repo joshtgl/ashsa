@@ -93,6 +93,9 @@ jobs:
             zip_suffix: arm64
     permissions:
       contents: read
+      attestations: write
+      artifact-metadata: write
+      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -118,19 +121,45 @@ jobs:
       - name: Install cargo-lambda
         run: cargo install cargo-lambda --version 1.9.1 --locked
 
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+
       - name: Build Lambda zip
         run: cargo lambda build --release --output-format zip --target ${{ matrix.target }}
 
-      - name: Prepare named Lambda zip
+      - name: Prepare Lambda assets
         env:
           ZIP_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.zip
-        run: cp target/lambda/ashsa/bootstrap.zip "$ZIP_NAME"
+          SBOM_NAME: ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
+        run: |
+          cp target/lambda/ashsa/bootstrap.zip "$ZIP_NAME"
+          cargo cyclonedx --format json --target ${{ matrix.target }} --override-filename "$SBOM_NAME"
+
+      - name: Attest Lambda provenance
+        id: attest_provenance
+        uses: actions/attest@59d8942ac46f204658d82af2d51679c08f6b95f4 # v4.1.0
+        with:
+          subject-path: ashsa-lambda-${{ matrix.zip_suffix }}.zip
+
+      - name: Attest Lambda SBOM
+        id: attest_sbom
+        uses: actions/attest@59d8942ac46f204658d82af2d51679c08f6b95f4 # v4.1.0
+        with:
+          subject-path: ashsa-lambda-${{ matrix.zip_suffix }}.zip
+          sbom-path: ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
+
+      - name: Report attestation URLs
+        run: |
+          echo "Provenance attestation: ${{ steps.attest_provenance.outputs.attestation-url }}"
+          echo "SBOM attestation: ${{ steps.attest_sbom.outputs.attestation-url }}"
 
       - name: Upload Lambda artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact_name }}
-          path: ashsa-lambda-${{ matrix.zip_suffix }}.zip
+          path: |
+            ashsa-lambda-${{ matrix.zip_suffix }}.zip
+            ashsa-lambda-${{ matrix.zip_suffix }}.cdx.json
           if-no-files-found: error
 
   attach-lambda-assets:
@@ -153,4 +182,6 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ fromJSON(needs.release.outputs.releases)[0].tag }}
-          files: dist/*.zip
+          files: |
+            dist/*.zip
+            dist/*.cdx.json
