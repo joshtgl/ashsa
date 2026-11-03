@@ -119,7 +119,7 @@ jobs:
         run: zig version
 
       - name: Install cargo-lambda
-        run: cargo install cargo-lambda --version 1.9.1 --locked
+        run: cargo install cargo-lambda --version 1.9.2 --locked
 
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --version 0.5.9 --locked
