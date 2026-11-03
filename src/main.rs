@@ -4,6 +4,7 @@ use ashsa::handler::App;
 use lambda_runtime::{Error, LambdaEvent, service_fn};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
@@ -17,9 +18,22 @@ async fn main() -> Result<(), Error> {
 
     lambda_runtime::run(service_fn(move |event: LambdaEvent<Value>| {
         let app = Arc::clone(&app);
-        async move { Ok::<Value, Error>(app.handle_event(event.payload).await) }
+        let deadline = lambda_deadline(event.context.deadline());
+        async move { Ok::<Value, Error>(app.handle_event(event.payload, deadline).await) }
     }))
     .await
+}
+
+/// Converts the Lambda wall-clock deadline into a monotonic `Instant`.
+/// A deadline of zero means the runtime did not provide one.
+fn lambda_deadline(deadline: SystemTime) -> Option<Instant> {
+    if deadline == SystemTime::UNIX_EPOCH {
+        return None;
+    }
+    let remaining = deadline
+        .duration_since(SystemTime::now())
+        .unwrap_or_default();
+    Some(Instant::now() + remaining)
 }
 
 fn init_tracing() {

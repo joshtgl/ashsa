@@ -1,7 +1,15 @@
 use crate::config::Config;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use serde_json::{Value, json};
-use tracing::{debug, error, info};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tracing::{debug, error, info, warn};
+
+/// Time reserved before the Lambda deadline so a response can still be returned.
+const DEADLINE_MARGIN: Duration = Duration::from_millis(500);
+const BASE_BACKOFF: Duration = Duration::from_millis(100);
+const MAX_BACKOFF: Duration = Duration::from_secs(1);
+/// Minimum time left after a backoff for another attempt to be worthwhile.
+const MIN_ATTEMPT_TIME: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 pub struct App {
@@ -41,14 +49,19 @@ impl App {
         Self { config, client }
     }
 
-    pub async fn handle_event(&self, event: Value) -> Value {
+    /// Handles an Alexa event. `deadline` is the Lambda invocation deadline, if known;
+    /// downstream retries never run past it (less a small margin) or past the
+    /// configured request budget.
+    pub async fn handle_event(&self, event: Value, deadline: Option<Instant>) -> Value {
         info!("processing Alexa request");
 
         if self.config.debug {
             debug!(event = %sanitize_json(&event), "received Alexa event");
         }
 
-        match self.handle_event_inner(event).await {
+        let deadline = self.effective_deadline(deadline);
+
+        match self.handle_event_inner(event, deadline).await {
             Ok(response) => response,
             Err(HandlerError::InvalidRequest(err)) => {
                 error!(error = %err, "invalid request");
@@ -58,6 +71,10 @@ impl App {
                 error!(message, "downstream authorization failure");
                 alexa_error("INVALID_AUTHORIZATION_CREDENTIAL", message)
             }
+            Err(HandlerError::Unreachable(message)) => {
+                error!(message, "downstream endpoint unreachable");
+                alexa_error("ENDPOINT_UNREACHABLE", message)
+            }
             Err(HandlerError::Internal(message)) => {
                 error!(message, "internal handler error");
                 alexa_error("INTERNAL_ERROR", message)
@@ -65,20 +82,28 @@ impl App {
         }
     }
 
-    async fn handle_event_inner(&self, event: Value) -> Result<Value, HandlerError> {
+    fn effective_deadline(&self, lambda_deadline: Option<Instant>) -> Instant {
+        let budget_deadline = Instant::now() + self.config.request_budget;
+        match lambda_deadline.and_then(|deadline| deadline.checked_sub(DEADLINE_MARGIN)) {
+            Some(deadline) => deadline.min(budget_deadline),
+            None => budget_deadline,
+        }
+    }
+
+    async fn handle_event_inner(
+        &self,
+        event: Value,
+        deadline: Instant,
+    ) -> Result<Value, HandlerError> {
         validate_payload_version(&event).map_err(HandlerError::InvalidRequest)?;
         let token = extract_token(&event, &self.config).map_err(HandlerError::InvalidRequest)?;
         let url = format!("{}/api/alexa/smart_home", self.config.base_url);
 
         let response = self
-            .client
-            .post(url)
-            .bearer_auth(token)
-            .json(&event)
-            .send()
+            .send_with_retries(&url, token, &event, deadline)
             .await
             .map_err(|err| {
-                HandlerError::Internal(format!("failed to call downstream endpoint: {err}"))
+                HandlerError::Unreachable(format!("failed to call downstream endpoint: {err}"))
             })?;
 
         let status = response.status();
@@ -95,18 +120,99 @@ impl App {
         } else if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             Err(HandlerError::Authorization(body))
         } else {
-            Err(HandlerError::Internal(format!(
-                "downstream endpoint returned {}: {}",
-                status.as_u16(),
-                body
-            )))
+            let message = format!("downstream endpoint returned {}: {}", status.as_u16(), body);
+            if status.is_server_error() {
+                Err(HandlerError::Unreachable(message))
+            } else {
+                Err(HandlerError::Internal(message))
+            }
         }
     }
+
+    /// Sends the request, retrying only failures where the request most likely never
+    /// reached Home Assistant, since some directives (e.g. AdjustBrightness) are not
+    /// idempotent.
+    async fn send_with_retries(
+        &self,
+        url: &str,
+        token: &str,
+        event: &Value,
+        deadline: Instant,
+    ) -> Result<Response, reqwest::Error> {
+        let mut attempt = 0;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let result = self
+                .client
+                .post(url)
+                .bearer_auth(token)
+                .json(event)
+                .timeout(remaining.max(Duration::from_millis(1)))
+                .send()
+                .await;
+
+            if attempt >= self.config.max_retries || !is_retryable(&result) {
+                return result;
+            }
+
+            let backoff = backoff_delay(attempt);
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining < backoff + MIN_ATTEMPT_TIME {
+                debug!(attempt, "request budget exhausted, not retrying");
+                return result;
+            }
+
+            attempt += 1;
+            match &result {
+                Ok(response) => warn!(
+                    attempt,
+                    status = response.status().as_u16(),
+                    backoff_ms = backoff.as_millis() as u64,
+                    "retrying downstream request"
+                ),
+                Err(err) => warn!(
+                    attempt,
+                    error = %err,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "retrying downstream request"
+                ),
+            }
+            tokio::time::sleep(backoff).await;
+        }
+    }
+}
+
+fn is_retryable(result: &Result<Response, reqwest::Error>) -> bool {
+    match result {
+        Ok(response) => matches!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS
+                | StatusCode::BAD_GATEWAY
+                | StatusCode::SERVICE_UNAVAILABLE
+                | StatusCode::GATEWAY_TIMEOUT
+        ),
+        Err(err) => err.is_connect(),
+    }
+}
+
+/// Exponential backoff capped at `MAX_BACKOFF`, with up to 50% jitter added.
+fn backoff_delay(attempt: u32) -> Duration {
+    let base = BASE_BACKOFF
+        .saturating_mul(2u32.saturating_pow(attempt))
+        .min(MAX_BACKOFF);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos())
+        .unwrap_or(0);
+    let jitter_range = base.as_millis() as u64 / 2 + 1;
+    base + Duration::from_millis(u64::from(nanos) % jitter_range)
 }
 
 enum HandlerError {
     InvalidRequest(RequestError),
     Authorization(String),
+    Unreachable(String),
     Internal(String),
 }
 
@@ -147,7 +253,7 @@ fn extract_token<'a>(event: &'a Value, config: &'a Config) -> Result<&'a str, Re
     Err(RequestError::MissingToken)
 }
 
-fn validated_scope<'a>(event: &'a Value) -> Result<&'a Value, RequestError> {
+fn validated_scope(event: &Value) -> Result<&Value, RequestError> {
     let directive = event
         .get("directive")
         .ok_or(RequestError::MissingDirective)?;
@@ -216,6 +322,7 @@ mod tests {
     use mockito::{Matcher, Server};
     use reqwest::Client;
     use serde_json::{Value, json};
+    use std::time::{Duration, Instant};
 
     fn config(base_url: String) -> Config {
         Config {
@@ -224,6 +331,8 @@ mod tests {
             debug: false,
             insecure_skip_tls_verify: false,
             fallback_bearer_token: None,
+            max_retries: 2,
+            request_budget: Duration::from_secs(2),
         }
     }
 
@@ -394,7 +503,7 @@ mod tests {
         let cfg = config(server.url());
         let client = build_http_client(&cfg).unwrap();
         let app = App::new(cfg, client);
-        let actual = app.handle_event(event).await;
+        let actual = app.handle_event(event, None).await;
 
         mock.assert_async().await;
         assert_eq!(actual, response_body);
@@ -421,7 +530,7 @@ mod tests {
         cfg.fallback_bearer_token = Some("fallback-token".to_owned());
         let client = build_http_client(&cfg).unwrap();
         let app = App::new(cfg, client);
-        let actual = app.handle_event(event).await;
+        let actual = app.handle_event(event, None).await;
 
         mock.assert_async().await;
         assert_eq!(actual, response_body);
@@ -443,7 +552,7 @@ mod tests {
             .await;
 
         let app = App::new(config(server.url()), Client::new());
-        let actual = app.handle_event(event).await;
+        let actual = app.handle_event(event, None).await;
 
         mock.assert_async().await;
         assert_eq!(
@@ -453,7 +562,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downstream_server_error_maps_to_internal_error() {
+    async fn downstream_server_error_maps_to_endpoint_unreachable() {
         let mut server = Server::new_async().await;
         let event = sample_event(json!({
             "type": "BearerToken",
@@ -468,13 +577,13 @@ mod tests {
             .await;
 
         let app = App::new(config(server.url()), Client::new());
-        let actual = app.handle_event(event).await;
+        let actual = app.handle_event(event, None).await;
 
         mock.assert_async().await;
         assert_eq!(
             actual,
             alexa_error(
-                "INTERNAL_ERROR",
+                "ENDPOINT_UNREACHABLE",
                 "downstream endpoint returned 500: boom".to_owned()
             )
         );
@@ -496,7 +605,7 @@ mod tests {
             .await;
 
         let app = App::new(config(server.url()), Client::new());
-        let actual = app.handle_event(event).await;
+        let actual = app.handle_event(event, None).await;
 
         mock.assert_async().await;
         assert!(
@@ -508,21 +617,131 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transport_failure_maps_to_internal_error() {
+    async fn transport_failure_maps_to_endpoint_unreachable() {
         let app = App::new(config("http://127.0.0.1:9".to_owned()), Client::new());
         let event = sample_event(json!({
             "type": "BearerToken",
             "token": "test-token"
         }));
 
-        let actual = app.handle_event(event).await;
+        let actual = app.handle_event(event, None).await;
 
-        assert_eq!(actual["event"]["payload"]["type"], "INTERNAL_ERROR");
+        assert_eq!(actual["event"]["payload"]["type"], "ENDPOINT_UNREACHABLE");
         assert!(
             actual["event"]["payload"]["message"]
                 .as_str()
                 .unwrap()
                 .contains("failed to call downstream endpoint")
         );
+    }
+
+    fn bearer_event() -> Value {
+        sample_event(json!({
+            "type": "BearerToken",
+            "token": "test-token"
+        }))
+    }
+
+    #[tokio::test]
+    async fn service_unavailable_is_retried_until_success() {
+        let mut server = Server::new_async().await;
+        let response_body = json!({"event": {"header": {"name": "Response"}}});
+
+        let unavailable = server
+            .mock("POST", "/api/alexa/smart_home")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+        let success = server
+            .mock("POST", "/api/alexa/smart_home")
+            .with_status(200)
+            .with_body(response_body.to_string())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let app = App::new(config(server.url()), Client::new());
+        let actual = app.handle_event(bearer_event(), None).await;
+
+        unavailable.assert_async().await;
+        success.assert_async().await;
+        assert_eq!(actual, response_body);
+    }
+
+    #[tokio::test]
+    async fn internal_server_error_is_not_retried() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/alexa/smart_home")
+            .with_status(500)
+            .with_body("boom")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let app = App::new(config(server.url()), Client::new());
+        app.handle_event(bearer_event(), None).await;
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn retries_stop_after_max_retries() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/alexa/smart_home")
+            .with_status(502)
+            .with_body("bad gateway")
+            .expect(3)
+            .create_async()
+            .await;
+
+        let app = App::new(config(server.url()), Client::new());
+        let actual = app.handle_event(bearer_event(), None).await;
+
+        mock.assert_async().await;
+        assert_eq!(
+            actual,
+            alexa_error(
+                "ENDPOINT_UNREACHABLE",
+                "downstream endpoint returned 502: bad gateway".to_owned()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_budget_prevents_retry() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/alexa/smart_home")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut cfg = config(server.url());
+        cfg.request_budget = Duration::from_millis(200);
+        let app = App::new(cfg, Client::new());
+        app.handle_event(bearer_event(), None).await;
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn lambda_deadline_limits_retries() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/api/alexa/smart_home")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let app = App::new(config(server.url()), Client::new());
+        let deadline = Instant::now() + Duration::from_millis(700);
+        app.handle_event(bearer_event(), Some(deadline)).await;
+
+        mock.assert_async().await;
     }
 }

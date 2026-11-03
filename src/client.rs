@@ -12,7 +12,7 @@ pub fn build_http_client(config: &Config) -> Result<Client, reqwest::Error> {
         .use_rustls_tls()
         .pool_idle_timeout(Duration::from_secs(90))
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(10))
+        .timeout(config.request_budget)
         .user_agent(user_agent)
         .danger_accept_invalid_certs(config.insecure_skip_tls_verify)
         .build()

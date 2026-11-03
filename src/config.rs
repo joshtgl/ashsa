@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
@@ -8,12 +9,15 @@ pub struct Config {
     pub debug: bool,
     pub insecure_skip_tls_verify: bool,
     pub fallback_bearer_token: Option<String>,
+    pub max_retries: u32,
+    pub request_budget: Duration,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfigError {
     Missing(&'static str),
     InvalidBool { key: &'static str, value: String },
+    InvalidNumber { key: &'static str, value: String },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -22,6 +26,9 @@ impl std::fmt::Display for ConfigError {
             Self::Missing(key) => write!(f, "missing required environment variable {key}"),
             Self::InvalidBool { key, value } => {
                 write!(f, "invalid boolean value for {key}: {value}")
+            }
+            Self::InvalidNumber { key, value } => {
+                write!(f, "invalid numeric value for {key}: {value}")
             }
         }
     }
@@ -52,6 +59,17 @@ impl Config {
             .get("LONG_LIVED_ACCESS_TOKEN")
             .filter(|value| !value.is_empty())
             .cloned();
+        let max_retries = parse_u64(vars, "MAX_RETRIES")?
+            .map(|value| {
+                u32::try_from(value).map_err(|_| ConfigError::InvalidNumber {
+                    key: "MAX_RETRIES",
+                    value: value.to_string(),
+                })
+            })
+            .transpose()?
+            .unwrap_or(2);
+        let request_budget =
+            Duration::from_millis(parse_u64(vars, "REQUEST_BUDGET_MS")?.unwrap_or(7000));
 
         Ok(Self {
             base_url,
@@ -59,6 +77,8 @@ impl Config {
             debug,
             insecure_skip_tls_verify,
             fallback_bearer_token,
+            max_retries,
+            request_budget,
         })
     }
 }
@@ -81,10 +101,29 @@ fn parse_bool(
     }
 }
 
+fn parse_u64(
+    vars: &HashMap<String, String>,
+    key: &'static str,
+) -> Result<Option<u64>, ConfigError> {
+    let Some(value) = vars.get(key) else {
+        return Ok(None);
+    };
+
+    value
+        .trim()
+        .parse()
+        .map(Some)
+        .map_err(|_| ConfigError::InvalidNumber {
+            key,
+            value: value.clone(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Config, ConfigError};
     use std::collections::HashMap;
+    use std::time::Duration;
 
     fn vars(entries: &[(&str, &str)]) -> HashMap<String, String> {
         entries
@@ -133,6 +172,55 @@ mod tests {
         assert_eq!(
             config.fallback_bearer_token.as_deref(),
             Some("fallback-token")
+        );
+    }
+
+    #[test]
+    fn retry_settings_default_when_unset() {
+        let config = Config::from_map(&vars(&[("BASE_URL", "https://example.com")])).unwrap();
+        assert_eq!(config.max_retries, 2);
+        assert_eq!(config.request_budget, Duration::from_millis(7000));
+    }
+
+    #[test]
+    fn retry_settings_are_parsed() {
+        let config = Config::from_map(&vars(&[
+            ("BASE_URL", "https://example.com"),
+            ("MAX_RETRIES", "0"),
+            ("REQUEST_BUDGET_MS", "5000"),
+        ]))
+        .unwrap();
+
+        assert_eq!(config.max_retries, 0);
+        assert_eq!(config.request_budget, Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn invalid_retry_settings_are_rejected() {
+        let err = Config::from_map(&vars(&[
+            ("BASE_URL", "https://example.com"),
+            ("MAX_RETRIES", "lots"),
+        ]))
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ConfigError::InvalidNumber {
+                key: "MAX_RETRIES",
+                value: "lots".to_owned()
+            }
+        );
+
+        let err = Config::from_map(&vars(&[
+            ("BASE_URL", "https://example.com"),
+            ("REQUEST_BUDGET_MS", "-1"),
+        ]))
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ConfigError::InvalidNumber {
+                key: "REQUEST_BUDGET_MS",
+                value: "-1".to_owned()
+            }
         );
     }
 }
