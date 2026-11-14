@@ -8,6 +8,12 @@
   ],
   "rangeStrategy": "bump",
   "prConcurrentLimit": 5,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on monday"
+    ]
+  },
   "customManagers": [
     {
       "customType": "regex",
@@ -50,6 +56,28 @@
       ],
       "depNameTemplate": "release-plz",
       "datasourceTemplate": "crate"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "cargo install (?<depName>cargo-deny) --version (?<currentValue>\\S+) --locked"
+      ],
+      "datasourceTemplate": "crate"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/(ci|lambda-package|release)\\.yml$/"
+      ],
+      "matchStrings": [
+        "uses: dtolnay/rust-toolchain@[^\\n]+\\n\\s+with:\\n\\s+toolchain: (?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "rust",
+      "packageNameTemplate": "rust-lang/rust",
+      "datasourceTemplate": "github-releases"
     }
   ],
   "packageRules": [
@@ -57,7 +85,10 @@
       "matchManagers": [
         "cargo"
       ],
-      "groupName": "rust dependencies"
+      "groupName": "rust dependencies",
+      "matchUpdateTypes": [
+        "!lockFileMaintenance"
+      ]
     },
     {
       "matchManagers": [
