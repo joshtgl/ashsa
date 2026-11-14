@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.0](https://github.com/joshtgl/ashsa/compare/v0.2.3...v0.3.0) - 2026-11-14
+
+### Added
+
+- retry failed downstream requests within Alexa's time limit
+
+### Fixed
+
+- *(deps)* update rustls, rustls-webpki, webpki-root-certs and h2 for security advisories
+- *(ci)* bump cargo-lambda to 1.9.2 for aarch64 linking
+- *(deps)* update rust dependencies
+- *(ci)* pin to 1.97 for now
+
+### Other
+
+- *(deps)* update github actions
+- Merge pull request #19 from joshtgl/chore/lock-file-maintenance
+- enable lock file maintenance, toolchain updates and advisory checks
+- *(deps)* update dependency rust to v1.100.0
+- *(deps)* update softprops/action-gh-release action to v3.0.4
+- Merge pull request #13 from joshtgl/renovate/github-actions
+- *(deps)* update github actions
+- *(deps)* update dependency release-plz to 0.4.0
+- *(deps)* update actions/checkout action to v7
+- update readme
+
 ## [0.2.3](https://github.com/joshtgl/ashsa/compare/v0.2.2...v0.2.3) - 2026-06-15
 
 ### Fixed
