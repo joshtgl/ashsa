@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/joshtgl/ashsa/compare/v0.3.0...v0.3.1) - 2026-11-18
+
+### Other
+
+- Merge pull request #22 from joshtgl/renovate/github-actions
+- *(deps)* update dependency cargo-deny to 0.21.0
+- *(deps)* update dtolnay/rust-toolchain digest to df2a88e
+
 ## [0.3.0](https://github.com/joshtgl/ashsa/compare/v0.2.3...v0.3.0) - 2026-11-14
 
 ### Added
